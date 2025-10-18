@@ -1,203 +1,154 @@
+"""
+feature_extraction.py
+
+This module provides functions to extract time-domain features from EEG epochs.
+It is designed to be robust, well-documented, and ready for integration into the
+main project pipeline.
+
+For Iteration 1, this module implements a complete set of 16 time-domain features.
+"""
+
 import numpy as np
+from scipy import stats
+import pandas as pd
+import config # Assuming config.py is in the parent directory or PYTHONPATH
+
+def _calculate_hjorth_parameters(epoch):
+    """
+    Calculates the three Hjorth parameters (Activity, Mobility, Complexity).
+
+    This implementation includes a small epsilon to prevent division-by-zero
+    errors on flat or near-flat signals.
+
+    Args:
+        epoch (np.ndarray): A 1D signal epoch.
+
+    Returns:
+        tuple: A tuple containing (activity, mobility, complexity).
+    """
+    # Ensure epoch is a numpy array
+    epoch = np.asarray(epoch)
+    
+    # Calculate first and second derivatives
+    diff1 = np.diff(epoch)
+    diff2 = np.diff(diff1)
+
+    # --- Activity ---
+    # The variance of the signal itself.
+    activity = np.var(epoch)
+
+    # --- Mobility ---
+    # The standard deviation of the first derivative divided by the standard
+    # deviation of the original signal. Represents the mean frequency.
+    var_diff1 = np.var(diff1)
+    # Add a small constant (epsilon) to the denominator to avoid division by zero
+    mobility = np.sqrt(var_diff1 / (activity + 1e-8))
+
+    # --- Complexity ---
+    # The ratio of the mobility of the first derivative to the mobility of the
+    # original signal. Represents the change in frequency.
+    var_diff2 = np.var(diff2)
+    mobility_diff1 = np.sqrt(var_diff2 / (var_diff1 + 1e-8))
+    complexity = mobility_diff1 / (mobility + 1e-8)
+    
+    return activity, mobility, complexity
 
 def extract_time_domain_features(epoch):
     """
-    EXAMPLE: Extract basic time-domain features from a single epoch.
-
-    This is a MINIMAL example with only 3 features.
-    Students must implement the remaining 13+ time-domain features.
-
-    Works for any signal type (EEG, EOG, EMG) but students should consider
-    signal-specific features for optimal performance.
+    Extracts a comprehensive set of 16 time-domain features from a single epoch.
+    This is the complete feature set required for Iteration 1.
 
     Args:
         epoch (np.ndarray): A 1D array representing one epoch of signal data.
 
     Returns:
-        dict: A dictionary of features.
+        dict: A dictionary of feature names and their calculated values.
     """
-    # EXAMPLE: Only 3 basic features - students must add 13+ more
-    features = {
-        'mean': np.mean(epoch),
-        'median': np.median(epoch),
-        'std': np.std(epoch),
-    }
+    features = {}
 
-    # TODO: Students must implement remaining time-domain features:
-    # Basic statistical features:
-    # features['variance'] = np.var(epoch)
-    # features['rms'] = np.sqrt(np.mean(epoch**2))
-    # features['min'] = np.min(epoch)
-    # features['max'] = np.max(epoch)
-    # features['range'] = np.max(epoch) - np.min(epoch)
-    # features['skewness'] = scipy.stats.skew(epoch)
-    # features['kurtosis'] = scipy.stats.kurtosis(epoch)
+    # --- 1. Basic Statistical Features (7 features) ---
+    features['mean'] = np.mean(epoch)
+    features['median'] = np.median(epoch)
+    features['std'] = np.std(epoch)
+    features['variance'] = np.var(epoch)
+    features['rms'] = np.sqrt(np.mean(epoch**2))
+    features['skewness'] = stats.skew(epoch)
+    features['kurtosis'] = stats.kurtosis(epoch)
 
-    # Signal complexity features:
-    # features['zero_crossings'] = np.sum(np.diff(np.sign(epoch)) != 0)
-    # features['hjorth_activity'] = np.var(epoch)
-    # features['hjorth_mobility'] = np.sqrt(np.var(np.diff(epoch)) / np.var(epoch))
-    # features['hjorth_complexity'] = hjorth_complexity(epoch)
+    # --- 2. Amplitude and Range Features (4 features) ---
+    features['min'] = np.min(epoch)
+    features['max'] = np.max(epoch)
+    features['ptp_amplitude'] = np.ptp(epoch) # Peak-to-peak
+    q75, q25 = np.percentile(epoch, [75, 25])
+    features['iqr'] = q75 - q25 # Interquartile range
 
-    # Signal energy and power:
-    # features['total_energy'] = np.sum(epoch**2)
-    # features['mean_power'] = np.mean(epoch**2)
+    # --- 3. Hjorth Parameters (3 features) ---
+    activity, mobility, complexity = _calculate_hjorth_parameters(epoch)
+    features['hjorth_activity'] = activity
+    features['hjorth_mobility'] = mobility
+    features['hjorth_complexity'] = complexity
+    
+    # --- 4. Signal-based Features (2 features) ---
+    features['waveform_length'] = np.sum(np.abs(np.diff(epoch)))
+    features['zero_crossing_rate'] = len(np.where(np.diff(np.sign(epoch)))[0]) / len(epoch)
 
     return features
 
-def extract_features(data, config):
+def extract_features(preprocessed_data, labels):
     """
-    STUDENT IMPLEMENTATION AREA: Extract features based on current iteration.
+    Orchestrates the feature extraction process for all epochs and channels.
 
-    This function should handle both single-channel (old format) and
-    multi-channel data (new format with 2 EEG + 2 EOG + 1 EMG channels).
-
-    Iteration 1: 16 time-domain features per EEG channel
-    Iteration 2: 31+ features (time + frequency domain) per channel
-    Iteration 3: Multi-signal features (EEG + EOG + EMG)
-    Iteration 4: Optimized feature set (selected subset)
+    This function iterates through each epoch and each specified channel, applies
+    the required feature extraction functions based on the current iteration
+    defined in the config file, and returns a structured DataFrame.
 
     Args:
-        data: Either np.ndarray (single-channel) or dict (multi-channel)
-        config (module): The configuration module.
+        preprocessed_data (dict): A dictionary where keys are channel names
+                                  (e.g., 'EEG C3-A2') and values are numpy arrays
+                                  of shape (n_epochs, n_samples).
+        labels (np.ndarray): A 1D array of labels corresponding to each epoch.
 
     Returns:
-        np.ndarray: A 2D array of features (n_epochs, n_features).
+        pd.DataFrame: A DataFrame where each row is an epoch and each column is a
+                      unique feature (e.g., 'EEG C3-A2_mean').
     """
     print(f"Extracting features for iteration {config.CURRENT_ITERATION}...")
 
-    # Detect if we have multi-channel data structure
-    is_multi_channel = isinstance(data, dict) and 'eeg' in data
+    channels = list(preprocessed_data.keys())
+    if not channels:
+        raise ValueError("No channels found in preprocessed data.")
+    
+    n_epochs = preprocessed_data[channels[0]].shape[0]
+    all_features_list = []
 
-    if is_multi_channel:
-        print("Processing multi-channel data (EEG + EOG + EMG)")
-        return extract_multi_channel_features(data, config)
-    else:
-        print("Processing single-channel data (backward compatibility)")
-        return extract_single_channel_features(data, config)
+    for i in range(n_epochs):
+        epoch_features = {}
+        
+        # --- Iteration-specific Logic ---
+        if config.CURRENT_ITERATION == 1:
+            # For Iteration 1, only extract time-domain features from EEG channels
+            for channel in channels:
+                if 'EEG' in channel:
+                    epoch_data = preprocessed_data[channel][i, :]
+                    time_features = extract_time_domain_features(epoch_data)
+                    for feature_name, value in time_features.items():
+                        epoch_features[f"{channel}_{feature_name}"] = value
 
+        # TODO: STUDENT IMPLEMENTATION for Iteration 2
+        # elif config.CURRENT_ITERATION == 2:
+        #     # Add frequency-domain features for EEG and EOG
+        #     pass
 
-def extract_multi_channel_features(multi_channel_data, config):
-    """
-    Extract features from multi-channel data: 2 EEG + 2 EOG + 1 EMG channels.
+        # TODO: STUDENT IMPLEMENTATION for Iteration 3
+        # elif config.CURRENT_ITERATION == 3:
+        #     # Add EMG features
+        #     pass
+            
+        all_features_list.append(epoch_features)
 
-    Students should expand this significantly!
-    """
-    n_epochs = multi_channel_data['eeg'].shape[0]
-    all_features = []
+    features_df = pd.DataFrame(all_features_list)
+    
+    print(f"Feature extraction complete. Final feature matrix shape: {features_df.shape}")
+    
+    return features_df
 
-    for epoch_idx in range(n_epochs):
-        epoch_features = []
-
-        # EEG features (2 channels)
-        for ch in range(multi_channel_data['eeg'].shape[1]):
-            eeg_signal = multi_channel_data['eeg'][epoch_idx, ch, :]
-            eeg_features = extract_time_domain_features(eeg_signal)
-            epoch_features.extend(list(eeg_features.values()))
-
-        if config.CURRENT_ITERATION >= 3:
-            # Add EOG features (2 channels)
-            for ch in range(multi_channel_data['eog'].shape[1]):
-                eog_signal = multi_channel_data['eog'][epoch_idx, ch, :]
-                eog_features = extract_eog_features(eog_signal)
-                epoch_features.extend(list(eog_features.values()))
-
-            # Add EMG features (1 channel)
-            emg_signal = multi_channel_data['emg'][epoch_idx, 0, :]
-            emg_features = extract_emg_features(emg_signal)
-            epoch_features.extend(list(emg_features.values()))
-
-        all_features.append(epoch_features)
-
-    features = np.array(all_features)
-
-    if config.CURRENT_ITERATION == 1:
-        expected = 2 * 3  # 2 EEG channels × 3 features each
-        print(f"Multi-channel Iteration 1: {features.shape[1]} features (target: {expected}+)")
-        print("Students must implement remaining 13 time-domain features per EEG channel!")
-    elif config.CURRENT_ITERATION >= 3:
-        print(f"Multi-channel features extracted: {features.shape[1]} total")
-        print("(2 EEG + 2 EOG + 1 EMG channels)")
-
-    return features
-
-
-def extract_single_channel_features(data, config):
-    """
-    Backward compatibility for single-channel data.
-    """
-    if config.CURRENT_ITERATION == 1:
-        # Iteration 1: Time-domain features (TARGET: 16 features)
-        # CURRENT: Only 3 features implemented - students must add 13 more!
-        all_features = []
-        for epoch in data:
-            features = extract_time_domain_features(epoch)
-            all_features.append(list(features.values()))
-        features = np.array(all_features)
-
-        print(f"WARNING: Only {features.shape[1]} features extracted, target is 16 for iteration 1")
-        print("Students must implement the remaining time-domain features!")
-
-    elif config.CURRENT_ITERATION == 2:
-        # TODO: Students must implement frequency-domain features
-        print("TODO: Students must implement frequency-domain feature extraction")
-        print("Target: ~31 features (time + frequency domain)")
-        n_epochs = data.shape[0] if len(data.shape) > 1 else 1
-        features = np.zeros((n_epochs, 0))  # Empty features - students must implement
-
-    elif config.CURRENT_ITERATION >= 3:
-        # TODO: Students must implement multi-signal features
-        print("TODO: Students should use multi-channel data format for iteration 3+")
-        n_epochs = data.shape[0] if len(data.shape) > 1 else 1
-        features = np.zeros((n_epochs, 0))  # Empty features - students must implement
-
-    else:
-        raise ValueError(f"Invalid iteration: {config.CURRENT_ITERATION}")
-
-    return features
-
-
-def extract_eog_features(eog_signal):
-    """
-    STUDENT TODO: Extract EOG-specific features for eye movement detection.
-
-    EOG signals are used to detect:
-    - Rapid eye movements (REM sleep indicator)
-    - Slow eye movements
-    - Eye blinks and artifacts
-    """
-    features = {
-        'eog_mean': np.mean(eog_signal),
-        'eog_std': np.std(eog_signal),
-        'eog_range': np.max(eog_signal) - np.min(eog_signal),
-    }
-
-    # TODO: Students should add:
-    # - Eye movement detection features
-    # - Rapid vs slow movement discrimination
-    # - Cross-channel correlations (left vs right eye)
-
-    return features
-
-
-def extract_emg_features(emg_signal):
-    """
-    STUDENT TODO: Extract EMG-specific features for muscle tone detection.
-
-    EMG signals are used to detect:
-    - Muscle tone levels (high in wake, low in REM)
-    - Muscle twitches and artifacts
-    - Sleep-related muscle activity
-    """
-    features = {
-        'emg_mean': np.mean(emg_signal),
-        'emg_std': np.std(emg_signal),
-        'emg_rms': np.sqrt(np.mean(emg_signal**2)),
-    }
-
-    # TODO: Students should add:
-    # - High-frequency power (muscle activity indicator)
-    # - Spectral edge frequency
-    # - Muscle tone quantification
-
-    return features
